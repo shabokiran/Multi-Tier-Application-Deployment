@@ -1,0 +1,80 @@
+---
+- name: Complete Kubernetes Node Setup
+  hosts: all
+  become: yes
+  
+  tasks:
+    - name: Update apt cache
+      apt:
+        update_cache: yes
+        cache_valid_time: 3600
+    
+    - name: Install required packages
+      apt:
+        name:
+          - apt-transport-https
+          - ca-certificates
+          - curl
+          - gnupg
+          - lsb-release
+        state: present
+    
+    - name: Install Docker
+      apt:
+        name: docker.io
+        state: present
+    
+    - name: Start Docker service
+      systemd:
+        name: docker
+        state: started
+        enabled: yes
+    
+    - name: Install MicroK8s
+      snap:
+        name: microk8s
+        classic: yes
+    
+    - name: Add user to microk8s group
+      user:
+        name: ubuntu
+        groups: microk8s
+        append: yes
+    
+    - name: Enable MicroK8s addons
+      command: microk8s enable {{ item }}
+      loop:
+        - dns
+        - storage
+        - ingress
+        - registry
+      register: result
+      changed_when: "'already enabled' not in result.stderr"
+    
+    - name: Wait for Kubernetes API
+      uri:
+        url: https://localhost:6443/version
+        validate_certs: no
+      register: result
+      until: result.status == 200
+      retries: 30
+      delay: 10
+    
+    - name: Create .kube directory
+      file:
+        path: /home/ubuntu/.kube
+        state: directory
+        owner: ubuntu
+        group: ubuntu
+    
+    - name: Create myapp namespace
+      command: microk8s kubectl create namespace myapp
+      ignore_errors: yes
+    
+    - name: Deploy application manifests
+      copy:
+        src: ../k8s/deployment.yaml
+        dest: /home/ubuntu/deployment.yaml
+    
+    - name: Apply Kubernetes manifests
+      command: microk8s kubectl apply -f /home/ubuntu/deployment.yaml
